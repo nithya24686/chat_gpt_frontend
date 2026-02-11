@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -90,10 +91,10 @@ const Login = () => {
             </div>
           </div>
         </div>
-        
+
         <p className="mt-6 text-center text-sm text-gray-600">
-          Not a member?{' '}
-          <a href="#" className="font-medium text-indigo-600 hover:text-indigo-500">Start a 14-day free trial</a>
+          Don't have an account?{' '}
+          <Link to="/signup" className="font-medium text-indigo-600 hover:text-indigo-500">Sign up</Link>
         </p>
       </div>
     </div>
