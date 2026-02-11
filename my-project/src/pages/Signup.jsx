@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 const Signup = () => {
+  const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -31,6 +32,11 @@ const Signup = () => {
       const data = await response.json();
       console.log('Signup successful:', data);
       setSuccess(true);
+
+      // Redirect to login after 2 seconds on success
+      setTimeout(() => {
+        navigate('/login');
+      }, 2000);
     } catch (err) {
       console.error('Signup Error:', err);
       setError(err.message || 'Something went wrong');
