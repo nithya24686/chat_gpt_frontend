@@ -1,44 +1,30 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
-// Helper: get a unique user key from the access token (use a hash of the token)
-const getUserKey = () => {
-    const token = localStorage.getItem("access_token");
-    if (!token) return null;
-    // Use a simple hash of the token as user key
-    let hash = 0;
-    for (let i = 0; i < token.length; i++) {
-        hash = (hash << 5) - hash + token.charCodeAt(i);
-        hash |= 0;
-    }
-    return "user_" + Math.abs(hash);
-};
-
-// Helper: load all chats for the current user
-const loadChats = () => {
-    const key = getUserKey();
-    if (!key) return [];
-    const stored = localStorage.getItem(`chats_${key}`);
-    return stored ? JSON.parse(stored) : [];
-};
-
-// Helper: save all chats for the current user
-const saveChats = (chats) => {
-    const key = getUserKey();
-    if (!key) return;
-    localStorage.setItem(`chats_${key}`, JSON.stringify(chats));
-};
+const API_BASE = "http://127.0.0.1:8000";
 
 const Ask_AI = () => {
     const navigate = useNavigate();
     const accessToken = localStorage.getItem("access_token");
 
-    const [chats, setChats] = useState([]); // array of { id, title, messages }
+    const [chats, setChats] = useState([]); // array of { id, title, created_at }
     const [activeChatId, setActiveChatId] = useState(null);
+    const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const messagesEndRef = useRef(null);
+
+    const authHeaders = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+    };
+
+    const handleLogout = () => {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("refresh_token");
+        navigate("/login");
+    };
 
     // Redirect to login if not authenticated
     useEffect(() => {
@@ -47,56 +33,95 @@ const Ask_AI = () => {
         }
     }, [accessToken, navigate]);
 
-    // Load chats from localStorage on mount
+    // Load chats from backend on mount
     useEffect(() => {
-        const saved = loadChats();
-        setChats(saved);
-        if (saved.length > 0) {
-            setActiveChatId(saved[0].id);
-        }
+        if (!accessToken) return;
+        const fetchChats = async () => {
+            try {
+                const res = await fetch(`${API_BASE}/chats`, {
+                    headers: authHeaders,
+                });
+                if (res.status === 401) {
+                    handleLogout();
+                    return;
+                }
+                const data = await res.json();
+                setChats(data);
+                if (data.length > 0) {
+                    setActiveChatId(data[0].id);
+                }
+            } catch (err) {
+                console.error("Failed to load chats:", err);
+            }
+        };
+        fetchChats();
     }, []);
+
+    // Load messages when active chat changes
+    useEffect(() => {
+        if (!activeChatId || !accessToken) {
+            setMessages([]);
+            return;
+        }
+        const fetchMessages = async () => {
+            try {
+                const res = await fetch(`${API_BASE}/chats/${activeChatId}`, {
+                    headers: authHeaders,
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    setMessages(data.messages || []);
+                }
+            } catch (err) {
+                console.error("Failed to load messages:", err);
+            }
+        };
+        fetchMessages();
+    }, [activeChatId]);
 
     // Auto-scroll to bottom
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [chats, activeChatId]);
-
-    const activeChat = chats.find((c) => c.id === activeChatId);
-    const messages = activeChat ? activeChat.messages : [];
+    }, [messages]);
 
     // Create a new chat
-    const handleNewChat = () => {
-        const newChat = {
-            id: Date.now().toString(),
-            title: "New Chat",
-            messages: [],
-        };
-        const updated = [newChat, ...chats];
-        setChats(updated);
-        setActiveChatId(newChat.id);
-        saveChats(updated);
-    };
-
-    // Delete a chat
-    const handleDeleteChat = (chatId, e) => {
-        e.stopPropagation();
-        const updated = chats.filter((c) => c.id !== chatId);
-        setChats(updated);
-        saveChats(updated);
-        if (activeChatId === chatId) {
-            setActiveChatId(updated.length > 0 ? updated[0].id : null);
+    const handleNewChat = async () => {
+        try {
+            const res = await fetch(`${API_BASE}/chats`, {
+                method: "POST",
+                headers: authHeaders,
+                body: JSON.stringify({ title: "New Chat" }),
+            });
+            const newChat = await res.json();
+            setChats([newChat, ...chats]);
+            setActiveChatId(newChat.id);
+            setMessages([]);
+        } catch (err) {
+            console.error("Failed to create chat:", err);
         }
     };
 
-    // Update chats state and persist
-    const updateChat = (chatId, newMessages, title) => {
-        const updated = chats.map((c) =>
-            c.id === chatId
-                ? { ...c, messages: newMessages, title: title || c.title }
-                : c
-        );
-        setChats(updated);
-        saveChats(updated);
+    // Delete a chat
+    const handleDeleteChat = async (chatId, e) => {
+        e.stopPropagation();
+        try {
+            await fetch(`${API_BASE}/chats/${chatId}`, {
+                method: "DELETE",
+                headers: authHeaders,
+            });
+            const updated = chats.filter((c) => c.id !== chatId);
+            setChats(updated);
+            if (activeChatId === chatId) {
+                if (updated.length > 0) {
+                    setActiveChatId(updated[0].id);
+                } else {
+                    setActiveChatId(null);
+                    setMessages([]);
+                }
+            }
+        } catch (err) {
+            console.error("Failed to delete chat:", err);
+        }
     };
 
     // Send a message
@@ -105,75 +130,87 @@ const Ask_AI = () => {
         if (!input.trim() || loading) return;
 
         let currentChatId = activeChatId;
-        let currentChats = chats;
 
         // If no active chat, create one
         if (!currentChatId) {
-            const newChat = {
-                id: Date.now().toString(),
-                title: input.substring(0, 30) + (input.length > 30 ? "..." : ""),
-                messages: [],
-            };
-            currentChats = [newChat, ...chats];
-            currentChatId = newChat.id;
-            setChats(currentChats);
-            setActiveChatId(currentChatId);
+            try {
+                const title = input.substring(0, 30) + (input.length > 30 ? "..." : "");
+                const res = await fetch(`${API_BASE}/chats`, {
+                    method: "POST",
+                    headers: authHeaders,
+                    body: JSON.stringify({ title }),
+                });
+                const newChat = await res.json();
+                currentChatId = newChat.id;
+                setChats([newChat, ...chats]);
+                setActiveChatId(currentChatId);
+            } catch (err) {
+                console.error("Failed to create chat:", err);
+                return;
+            }
         }
 
         const userMessage = { role: "user", content: input };
-        const currentChat = currentChats.find((c) => c.id === currentChatId);
-        const updatedMessages = [...(currentChat?.messages || []), userMessage];
-
-        // Set title from first message
-        const title =
-            currentChat?.messages.length === 0
-                ? input.substring(0, 30) + (input.length > 30 ? "..." : "")
-                : currentChat.title;
-
-        const newChats = currentChats.map((c) =>
-            c.id === currentChatId ? { ...c, messages: updatedMessages, title } : c
-        );
-        setChats(newChats);
-        saveChats(newChats);
-
+        const updatedMessages = [...messages, userMessage];
+        setMessages(updatedMessages);
         setInput("");
         setLoading(true);
 
         try {
-            const response = await fetch("http://127.0.0.1:8000/ask", {
+            // Save user message to backend
+            await fetch(`${API_BASE}/chats/${currentChatId}/messages`, {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers: authHeaders,
+                body: JSON.stringify(userMessage),
+            });
+
+            // Update chat title if first message
+            const currentChat = chats.find((c) => c.id === currentChatId);
+            if (currentChat && currentChat.title === "New Chat") {
+                const newTitle = input.substring(0, 30) + (input.length > 30 ? "..." : "");
+                await fetch(`${API_BASE}/chats/${currentChatId}`, {
+                    method: "PUT",
+                    headers: authHeaders,
+                    body: JSON.stringify({ title: newTitle }),
+                });
+                setChats(
+                    chats.map((c) =>
+                        c.id === currentChatId ? { ...c, title: newTitle } : c
+                    )
+                );
+            }
+
+            // Get AI response
+            const aiRes = await fetch(`${API_BASE}/ask`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     message: input,
-                    system_prompt: "You are a helpful assistant who understands Kannada, Kanglish (Kannada written in English script), and English. If the user writes in Kannada or Kanglish, you MUST reply in the same language they used. If they write in Kannada script, reply in Kannada script. If they write in Kanglish, reply in Kanglish. If they write in English, reply in English. Always be helpful and friendly.",
+                    system_prompt:
+                        "You are a helpful assistant who understands Kannada, Kanglish (Kannada written in English script), and English. If the user writes in Kannada or Kanglish, you MUST reply in the same language they used. If they write in Kannada script, reply in Kannada script. If they write in Kanglish, reply in Kanglish. If they write in English, reply in English. Always be helpful and friendly.",
                 }),
             });
 
-            if (!response.ok) throw new Error("Network response was not ok");
+            if (!aiRes.ok) throw new Error("AI response failed");
 
-            const data = await response.json();
-            const aiMessage = { role: "assistant", content: data.response };
-            const finalMessages = [...updatedMessages, aiMessage];
+            const aiData = await aiRes.json();
+            const aiMessage = { role: "assistant", content: aiData.response };
 
-            const finalChats = newChats.map((c) =>
-                c.id === currentChatId ? { ...c, messages: finalMessages } : c
-            );
-            setChats(finalChats);
-            saveChats(finalChats);
+            // Save AI message to backend
+            await fetch(`${API_BASE}/chats/${currentChatId}/messages`, {
+                method: "POST",
+                headers: authHeaders,
+                body: JSON.stringify(aiMessage),
+            });
+
+            setMessages([...updatedMessages, aiMessage]);
         } catch (error) {
-            console.error("Error fetching AI response:", error);
+            console.error("Error:", error);
             const errorMessage = {
                 role: "assistant",
                 content: "Sorry, something went wrong. Please try again.",
             };
-            const finalMessages = [...updatedMessages, errorMessage];
-            const finalChats = newChats.map((c) =>
-                c.id === currentChatId ? { ...c, messages: finalMessages } : c
-            );
-            setChats(finalChats);
-            saveChats(finalChats);
+            setMessages([...updatedMessages, errorMessage]);
         } finally {
             setLoading(false);
         }
@@ -240,6 +277,19 @@ const Ask_AI = () => {
                         </div>
                     ))}
                 </div>
+
+                {/* Logout Button */}
+                <div className="p-3 border-t border-gray-800">
+                    <button
+                        onClick={handleLogout}
+                        className="w-full flex items-center gap-2 px-4 py-3 bg-red-600/10 hover:bg-red-600/20 text-red-400 hover:text-red-300 rounded-xl text-sm font-medium transition-colors border border-red-800/30"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                        </svg>
+                        Logout
+                    </button>
+                </div>
             </div>
 
             {/* Main Chat Area */}
@@ -256,7 +306,7 @@ const Ask_AI = () => {
                             </svg>
                         </button>
                         <h1 className="text-lg font-semibold text-gray-200">
-                            {activeChat ? activeChat.title : "Ask AI"}
+                            {chats.find((c) => c.id === activeChatId)?.title || "Ask AI"}
                         </h1>
                     </div>
                 </div>
