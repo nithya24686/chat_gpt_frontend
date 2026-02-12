@@ -8,6 +8,7 @@ import Footer from './components/Footer'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import Dashboard from './pages/Dashboard'
+import Ask_AI from './pages/Ask_AI'
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/ask" element={<Ask_AI />} />
       </Routes>
       <Footer />
     </Router>
@@ -29,3 +31,4 @@ function App() {
 }
 
 export default App
+
